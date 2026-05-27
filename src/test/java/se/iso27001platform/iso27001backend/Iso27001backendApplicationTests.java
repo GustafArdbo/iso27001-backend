@@ -63,8 +63,22 @@ class Iso27001backendApplicationTests {
 		submitAnswer(assessmentId, "A.5.2", "PARTIAL");
 		submitAnswer(assessmentId, "A.5.3", "NOT_APPLICABLE");
 
+		mockMvc.perform(get("/assessments/{id}/questions", assessmentId))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(10))
+				.andExpect(jsonPath("$[0].controlId").value("A.5.1"))
+				.andExpect(jsonPath("$[0].answered").value(true))
+				.andExpect(jsonPath("$[0].answer").value("YES"))
+				.andExpect(jsonPath("$[3].controlId").value("A.5.4"))
+				.andExpect(jsonPath("$[3].answered").value(false))
+				.andExpect(jsonPath("$[3].answer").doesNotExist());
+
 		mockMvc.perform(get("/assessments/{id}/summary", assessmentId))
 				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.totalControls").value(10))
+				.andExpect(jsonPath("$.answeredControls").value(3))
+				.andExpect(jsonPath("$.unansweredControls").value(7))
+				.andExpect(jsonPath("$.completionPercentage").value(30))
 				.andExpect(jsonPath("$.totalAnswers").value(3))
 				.andExpect(jsonPath("$.applicableAnswers").value(2))
 				.andExpect(jsonPath("$.score").value(0.75))
