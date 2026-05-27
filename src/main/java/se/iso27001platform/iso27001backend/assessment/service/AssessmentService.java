@@ -17,6 +17,7 @@ import se.iso27001platform.iso27001backend.common.exception.ResourceNotFoundExce
 import se.iso27001platform.iso27001backend.control.model.ControlDefinition;
 import se.iso27001platform.iso27001backend.control.service.ControlCatalogService;
 import se.iso27001platform.iso27001backend.organization.model.Organization;
+import se.iso27001platform.iso27001backend.organization.service.OrganizationAccessService;
 import se.iso27001platform.iso27001backend.organization.service.OrganizationService;
 
 import java.util.EnumMap;
@@ -31,34 +32,41 @@ public class AssessmentService {
 	private final AssessmentRepository assessmentRepository;
 	private final AssessmentAnswerRepository assessmentAnswerRepository;
 	private final OrganizationService organizationService;
+	private final OrganizationAccessService organizationAccessService;
 	private final ControlCatalogService controlCatalogService;
 
 	public AssessmentService(
 			AssessmentRepository assessmentRepository,
 			AssessmentAnswerRepository assessmentAnswerRepository,
 			OrganizationService organizationService,
+			OrganizationAccessService organizationAccessService,
 			ControlCatalogService controlCatalogService
 	) {
 		this.assessmentRepository = assessmentRepository;
 		this.assessmentAnswerRepository = assessmentAnswerRepository;
 		this.organizationService = organizationService;
+		this.organizationAccessService = organizationAccessService;
 		this.controlCatalogService = controlCatalogService;
 	}
 
 	public AssessmentResponse create(CreateAssessmentRequest request) {
 		Organization organization = organizationService.getRequired(request.organizationId());
+		organizationAccessService.requireAssessmentEditor(request.organizationId());
 		Assessment assessment = assessmentRepository.save(new Assessment(organization, request.name()));
 		return AssessmentResponse.from(assessment);
 	}
 
 	@Transactional(readOnly = true)
 	public AssessmentResponse findById(UUID id) {
-		return AssessmentResponse.from(getRequired(id));
+		Assessment assessment = getRequired(id);
+		organizationAccessService.requireMember(assessment.getOrganization().getId());
+		return AssessmentResponse.from(assessment);
 	}
 
 	@Transactional(readOnly = true)
 	public List<AssessmentQuestionResponse> findQuestions(UUID id) {
-		getRequired(id);
+		Assessment assessment = getRequired(id);
+		organizationAccessService.requireMember(assessment.getOrganization().getId());
 		Map<String, AssessmentAnswer> answersByControlId = assessmentAnswerRepository.findByAssessment_Id(id).stream()
 				.collect(java.util.stream.Collectors.toMap(AssessmentAnswer::getControlId, answer -> answer));
 
@@ -69,6 +77,7 @@ public class AssessmentService {
 
 	public AssessmentAnswerResponse submitAnswer(UUID assessmentId, SubmitAnswerRequest request) {
 		Assessment assessment = getRequired(assessmentId);
+		organizationAccessService.requireAnswerEditor(assessment.getOrganization().getId());
 		String controlId = controlCatalogService.getRequired(request.controlId()).id();
 		AssessmentAnswer assessmentAnswer = assessmentAnswerRepository
 				.findByAssessment_IdAndControlId(assessmentId, controlId)
@@ -83,6 +92,7 @@ public class AssessmentService {
 	@Transactional(readOnly = true)
 	public AssessmentSummaryResponse summarize(UUID id) {
 		Assessment assessment = getRequired(id);
+		organizationAccessService.requireMember(assessment.getOrganization().getId());
 		List<AssessmentAnswer> answers = assessmentAnswerRepository.findByAssessment_Id(id);
 		List<ControlDefinition> controls = controlCatalogService.findAll();
 		Map<AnswerStatus, Long> answerCounts = countAnswers(answers);

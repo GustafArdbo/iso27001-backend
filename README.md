@@ -5,6 +5,7 @@ Spring Boot backend for an ISO 27001 readiness and audit platform.
 The current MVP covers a vertical slice:
 
 - Create organizations
+- Bootstrap the organization creator as `OWNER`
 - Create organization users
 - Create assessments
 - List ISO 27001-style control questions
@@ -100,6 +101,39 @@ POST /auth/revocations/current-session
 
 `/auth/revocations/current-session` revokes the presented token's `session_id` for this backend. Pair this with Supabase sign-out so refresh tokens are also terminated.
 
+## Authorization
+
+Authorization is organization-scoped through `app_users.supabase_user_id`.
+
+The backend resolves:
+
+```text
+Supabase JWT subject
+-> app_users.supabase_user_id
+-> organization membership
+-> role
+```
+
+Role rules:
+
+- `OWNER`: full organization access.
+- `ADMIN`: manage users and assessments.
+- `AUDITOR`: create assessments and submit answers.
+- `MEMBER`: submit answers and read organization assessment data.
+- `VIEWER`: read-only organization access.
+
+Current endpoint rules:
+
+- `POST /organizations` creates the organization and bootstraps the authenticated Supabase user as `OWNER`.
+- `GET /organizations/{id}` requires membership in that organization.
+- `POST /organizations/{id}/users` requires `OWNER` or `ADMIN`.
+- `GET /organizations/{id}/users` requires `OWNER` or `ADMIN`.
+- `GET /users/{id}` allows the user themself, or `OWNER`/`ADMIN` in that organization.
+- `POST /assessments` requires `OWNER`, `ADMIN`, or `AUDITOR` in the target organization.
+- `GET /assessments/{id}`, `/questions`, and `/summary` require membership in the assessment organization.
+- `POST /assessments/{id}/answers` requires `OWNER`, `ADMIN`, `AUDITOR`, or `MEMBER`.
+- `VIEWER` can read but cannot create assessments or submit answers.
+
 ## Tests
 
 Run:
@@ -137,6 +171,8 @@ $org = Invoke-RestMethod -Method Post `
   -ContentType "application/json" `
   -Body '{"name":"Demo AB"}'
 ```
+
+The authenticated Supabase user is automatically created as an `OWNER` membership for this organization.
 
 Create assessment:
 

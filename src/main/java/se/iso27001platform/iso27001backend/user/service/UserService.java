@@ -5,6 +5,7 @@ import org.springframework.transaction.annotation.Transactional;
 import se.iso27001platform.iso27001backend.common.exception.DuplicateResourceException;
 import se.iso27001platform.iso27001backend.common.exception.ResourceNotFoundException;
 import se.iso27001platform.iso27001backend.organization.model.Organization;
+import se.iso27001platform.iso27001backend.organization.service.OrganizationAccessService;
 import se.iso27001platform.iso27001backend.organization.service.OrganizationService;
 import se.iso27001platform.iso27001backend.user.dto.CreateUserRequest;
 import se.iso27001platform.iso27001backend.user.dto.UserResponse;
@@ -21,14 +22,21 @@ public class UserService {
 
 	private final AppUserRepository appUserRepository;
 	private final OrganizationService organizationService;
+	private final OrganizationAccessService organizationAccessService;
 
-	public UserService(AppUserRepository appUserRepository, OrganizationService organizationService) {
+	public UserService(
+			AppUserRepository appUserRepository,
+			OrganizationService organizationService,
+			OrganizationAccessService organizationAccessService
+	) {
 		this.appUserRepository = appUserRepository;
 		this.organizationService = organizationService;
+		this.organizationAccessService = organizationAccessService;
 	}
 
 	public UserResponse create(UUID organizationId, CreateUserRequest request) {
 		Organization organization = organizationService.getRequired(organizationId);
+		organizationAccessService.requireOwnerOrAdmin(organizationId);
 		String email = normalizeEmail(request.email());
 
 		if (appUserRepository.existsByOrganization_IdAndEmail(organizationId, email)) {
@@ -45,12 +53,15 @@ public class UserService {
 
 	@Transactional(readOnly = true)
 	public UserResponse findById(UUID id) {
-		return UserResponse.from(getRequired(id));
+		AppUser appUser = getRequired(id);
+		organizationAccessService.requireCanReadUser(appUser);
+		return UserResponse.from(appUser);
 	}
 
 	@Transactional(readOnly = true)
 	public List<UserResponse> findByOrganization(UUID organizationId) {
 		organizationService.getRequired(organizationId);
+		organizationAccessService.requireOwnerOrAdmin(organizationId);
 		return appUserRepository.findByOrganization_IdOrderByCreatedAtAsc(organizationId).stream()
 				.map(UserResponse::from)
 				.toList();

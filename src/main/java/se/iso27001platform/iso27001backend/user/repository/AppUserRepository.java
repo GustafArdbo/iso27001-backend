@@ -17,5 +17,7 @@ public interface AppUserRepository extends JpaRepository<AppUser, UUID> {
 
 	List<AppUser> findBySupabaseUserIdOrderByCreatedAtAsc(UUID supabaseUserId);
 
+	Optional<AppUser> findByOrganization_IdAndSupabaseUserId(UUID organizationId, UUID supabaseUserId);
+
 	Optional<AppUser> findByOrganization_IdAndEmail(UUID organizationId, String email);
 }
