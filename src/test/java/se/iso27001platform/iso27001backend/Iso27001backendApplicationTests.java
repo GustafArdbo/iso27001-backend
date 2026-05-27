@@ -19,9 +19,10 @@ import se.iso27001platform.iso27001backend.user.repository.AppUserRepository;
 import java.time.Instant;
 import java.util.UUID;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -216,6 +217,117 @@ class Iso27001backendApplicationTests {
 	}
 
 	@Test
+	void createsAndAcceptsOrganizationInvitation() throws Exception {
+		UUID organizationId = createOrganization("Invitation Flow AB");
+
+		String invitationResponse = mockMvc.perform(post("/organizations/{organizationId}/invitations", organizationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"email":"  AUDITOR@example.com  ","role":"AUDITOR"}
+								"""))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.invitation.organizationId").value(organizationId.toString()))
+				.andExpect(jsonPath("$.invitation.email").value("auditor@example.com"))
+				.andExpect(jsonPath("$.invitation.role").value("AUDITOR"))
+				.andExpect(jsonPath("$.invitation.status").value("PENDING"))
+				.andExpect(jsonPath("$.acceptanceToken").isNotEmpty())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		String token = readJson(invitationResponse).get("acceptanceToken").asText();
+
+		mockMvc.perform(post("/invitations/accept")
+						.with(authenticatedJwt(AUDITOR_SUPABASE_USER_ID))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"token":"%s"}
+								""".formatted(token)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.invitation.status").value("ACCEPTED"))
+				.andExpect(jsonPath("$.invitation.acceptedByUserId").isNotEmpty())
+				.andExpect(jsonPath("$.user.organizationId").value(organizationId.toString()))
+				.andExpect(jsonPath("$.user.email").value("auditor@example.com"))
+				.andExpect(jsonPath("$.user.supabaseUserId").value(AUDITOR_SUPABASE_USER_ID.toString()))
+				.andExpect(jsonPath("$.user.role").value("AUDITOR"));
+
+		mockMvc.perform(get("/organizations/{organizationId}/users", organizationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(2))
+				.andExpect(jsonPath("$[1].email").value("auditor@example.com"));
+
+		mockMvc.perform(get("/organizations/{organizationId}/invitations", organizationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(1))
+				.andExpect(jsonPath("$[0].status").value("ACCEPTED"));
+	}
+
+	@Test
+	void rejectsInvitationAcceptForDifferentEmail() throws Exception {
+		UUID organizationId = createOrganization("Invitation Email AB");
+		String token = createInvitation(organizationId, "auditor@example.com", UserRole.AUDITOR, OWNER_SUPABASE_USER_ID)
+				.get("acceptanceToken")
+				.asText();
+
+		mockMvc.perform(post("/invitations/accept")
+						.with(authenticatedJwt(VIEWER_SUPABASE_USER_ID))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"token":"%s"}
+								""".formatted(token)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.message").value("Invitation email does not match current user"));
+	}
+
+	@Test
+	void revokesPendingInvitation() throws Exception {
+		UUID organizationId = createOrganization("Invitation Revoke AB");
+		JsonNode invitationResponse = createInvitation(
+				organizationId,
+				"auditor@example.com",
+				UserRole.AUDITOR,
+				OWNER_SUPABASE_USER_ID
+		);
+		UUID invitationId = UUID.fromString(invitationResponse.get("invitation").get("id").asText());
+		String token = invitationResponse.get("acceptanceToken").asText();
+
+		mockMvc.perform(delete("/organizations/{organizationId}/invitations/{invitationId}", organizationId, invitationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isNoContent());
+
+		mockMvc.perform(post("/invitations/accept")
+						.with(authenticatedJwt(AUDITOR_SUPABASE_USER_ID))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"token":"%s"}
+								""".formatted(token)))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Invitation is not pending"));
+
+		mockMvc.perform(get("/organizations/{organizationId}/invitations", organizationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$[0].status").value("REVOKED"));
+	}
+
+	@Test
+	void preventsAdminFromInvitingOwner() throws Exception {
+		UUID organizationId = createOrganizationWithMembership("Invitation Roles AB", AUDITOR_SUPABASE_USER_ID, UserRole.ADMIN);
+
+		mockMvc.perform(post("/organizations/{organizationId}/invitations", organizationId)
+						.with(authenticatedJwt(AUDITOR_SUPABASE_USER_ID))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"email":"viewer@example.com","role":"OWNER"}
+								"""))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.message").value("Admins cannot invite owners"));
+	}
+
+	@Test
 	void rejectsDuplicateOrganizationUser() throws Exception {
 		UUID organizationId = createOrganizationWithMembership("Duplicate User AB", OWNER_SUPABASE_USER_ID, UserRole.OWNER);
 
@@ -380,8 +492,26 @@ class Iso27001backendApplicationTests {
 	}
 
 	private UUID readId(String json) throws Exception {
-		JsonNode response = objectMapper.readTree(json);
-		return UUID.fromString(response.get("id").asText());
+		return UUID.fromString(readJson(json).get("id").asText());
+	}
+
+	private JsonNode createInvitation(UUID organizationId, String email, UserRole role, UUID inviterSupabaseUserId) throws Exception {
+		String invitationResponse = mockMvc.perform(post("/organizations/{organizationId}/invitations", organizationId)
+						.with(authenticatedJwt(inviterSupabaseUserId))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"email":"%s","role":"%s"}
+								""".formatted(email, role)))
+				.andExpect(status().isCreated())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		return readJson(invitationResponse);
+	}
+
+	private JsonNode readJson(String json) throws Exception {
+		return objectMapper.readTree(json);
 	}
 
 	private RequestPostProcessor authenticatedJwt() {

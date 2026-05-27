@@ -7,6 +7,7 @@ The current MVP covers a vertical slice:
 - Create organizations
 - Bootstrap the organization creator as `OWNER`
 - Create organization users
+- Invite users to an organization
 - Create assessments
 - List ISO 27001-style control questions
 - Submit assessment answers
@@ -63,6 +64,7 @@ Later migrations add:
 - app user role constraints
 - `app_users.supabase_user_id`
 - `auth_revocations`
+- `organization_invitations`
 
 ## Authentication
 
@@ -129,6 +131,10 @@ Current endpoint rules:
 - `POST /organizations/{id}/users` requires `OWNER` or `ADMIN`.
 - `GET /organizations/{id}/users` requires `OWNER` or `ADMIN`.
 - `GET /users/{id}` allows the user themself, or `OWNER`/`ADMIN` in that organization.
+- `POST /organizations/{id}/invitations` requires `OWNER` or `ADMIN`.
+- `GET /organizations/{id}/invitations` requires `OWNER` or `ADMIN`.
+- `DELETE /organizations/{id}/invitations/{invitationId}` requires `OWNER` or `ADMIN`.
+- `POST /invitations/accept` requires a JWT whose email matches the invitation email.
 - `POST /assessments` requires `OWNER`, `ADMIN`, or `AUDITOR` in the target organization.
 - `GET /assessments/{id}`, `/questions`, and `/summary` require membership in the assessment organization.
 - `POST /assessments/{id}/answers` requires `OWNER`, `ADMIN`, `AUDITOR`, or `MEMBER`.
@@ -200,6 +206,38 @@ List organization users:
 Invoke-RestMethod "http://localhost:8080/organizations/$($org.id)/users" -Headers $headers
 ```
 
+Invite organization user:
+
+```powershell
+$invite = Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8080/organizations/$($org.id)/invitations" `
+  -Headers $headers `
+  -ContentType "application/json" `
+  -Body '{"email":"auditor@example.com","role":"AUDITOR"}'
+```
+
+The response includes `acceptanceToken` once. Store or send it through your invitation channel; the backend only stores a hash.
+
+Accept invitation while authenticated as the invited Supabase user:
+
+```powershell
+$invitedHeaders = @{ Authorization = "Bearer <invited-user-supabase-access-token>" }
+
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8080/invitations/accept" `
+  -Headers $invitedHeaders `
+  -ContentType "application/json" `
+  -Body (@{ token = $invite.acceptanceToken } | ConvertTo-Json)
+```
+
+Revoke pending invitation:
+
+```powershell
+Invoke-RestMethod -Method Delete `
+  -Uri "http://localhost:8080/organizations/$($org.id)/invitations/$($invite.invitation.id)" `
+  -Headers $headers
+```
+
 List controls:
 
 ```powershell
@@ -257,6 +295,13 @@ se.iso27001platform.iso27001backend
     dto
     enums
     model
+    service
+  invitation
+    controller
+    dto
+    enums
+    model
+    repository
     service
   organization
     controller

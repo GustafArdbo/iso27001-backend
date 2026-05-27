@@ -24,6 +24,11 @@ public class GlobalExceptionHandler {
 		return buildError(HttpStatus.CONFLICT, exception.getMessage(), request);
 	}
 
+	@ExceptionHandler(BadRequestException.class)
+	public ResponseEntity<ApiError> handleBadRequest(BadRequestException exception, HttpServletRequest request) {
+		return buildError(HttpStatus.BAD_REQUEST, exception.getMessage(), request);
+	}
+
 	@ExceptionHandler(AccessDeniedException.class)
 	public ResponseEntity<ApiError> handleAccessDenied(AccessDeniedException exception, HttpServletRequest request) {
 		return buildError(HttpStatus.FORBIDDEN, exception.getMessage(), request);
