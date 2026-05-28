@@ -25,3 +25,6 @@ spring:
         jwt:
           issuer-uri: ${SUPABASE_JWT_ISSUER}
           jwk-set-uri: ${SUPABASE_JWT_JWK_SET_URI}
+
+server:
+  port: ${PORT:8080}

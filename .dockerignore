@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+target
+*.iml
+
+.env
+.env.*
+
+Dockerfile
+README.md
+
+*.log
+*.tmp
