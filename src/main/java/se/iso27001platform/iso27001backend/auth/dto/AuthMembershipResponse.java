@@ -1,23 +1,25 @@
 package se.iso27001platform.iso27001backend.auth.dto;
 
-import se.iso27001platform.iso27001backend.user.enums.UserRole;
-import se.iso27001platform.iso27001backend.user.model.AppUser;
+import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
+import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
 
 import java.util.UUID;
 
 public record AuthMembershipResponse(
-		UUID userId,
+		UUID membershipId,
 		UUID organizationId,
+		UUID userProfileId,
 		String email,
-		UserRole role
+		MembershipRole role
 ) {
 
-	public static AuthMembershipResponse from(AppUser appUser) {
+	public static AuthMembershipResponse from(OrganizationMembership membership) {
 		return new AuthMembershipResponse(
-				appUser.getId(),
-				appUser.getOrganization().getId(),
-				appUser.getEmail(),
-				appUser.getRole()
+				membership.getId(),
+				membership.getOrganization().getId(),
+				membership.getUserProfile().getId(),
+				membership.getUserProfile().getEmail(),
+				membership.getRole()
 		);
 	}
 }

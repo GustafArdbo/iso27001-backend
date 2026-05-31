@@ -6,7 +6,7 @@ The current MVP covers a vertical slice:
 
 - Create organizations
 - Bootstrap the organization creator as `OWNER`
-- Create organization users
+- Create organization memberships
 - Invite users to an organization
 - Create assessments
 - List ISO 27001-style control questions
@@ -51,20 +51,16 @@ When the app starts, Flyway applies migrations from:
 src/main/resources/db/migration
 ```
 
-The first migration creates:
+The initial migration creates:
 
 - `organizations`
-- `app_users`
+- `user_profiles`
+- `organization_memberships`
 - `assessments`
 - `assessment_answers`
-- `flyway_schema_history`
-
-Later migrations add:
-
-- app user role constraints
-- `app_users.supabase_user_id`
 - `auth_revocations`
 - `organization_invitations`
+- `flyway_schema_history`
 
 ## Authentication
 
@@ -97,7 +93,7 @@ POST /auth/revocations/current-token
 POST /auth/revocations/current-session
 ```
 
-`/auth/me` returns the Supabase JWT identity plus any `app_users` memberships linked through `supabase_user_id`.
+`/auth/me` returns the Supabase JWT identity, its global `user_profiles` record when one exists, and organization memberships.
 
 `/auth/revocations/current-token` revokes only the presented access token until its `exp`.
 
@@ -105,21 +101,21 @@ POST /auth/revocations/current-session
 
 ## Authorization
 
-Authorization is organization-scoped through `app_users.supabase_user_id`.
+Authorization is organization-scoped through `organization_memberships`.
 
 The backend resolves:
 
 ```text
 Supabase JWT subject
--> app_users.supabase_user_id
--> organization membership
+-> user_profiles.supabase_user_id
+-> organization_memberships.user_profile_id
 -> role
 ```
 
 Role rules:
 
 - `OWNER`: full organization access.
-- `ADMIN`: manage users and assessments.
+- `ADMIN`: manage memberships and assessments.
 - `AUDITOR`: create assessments and submit answers.
 - `MEMBER`: submit answers and read organization assessment data.
 - `VIEWER`: read-only organization access.
@@ -128,9 +124,9 @@ Current endpoint rules:
 
 - `POST /organizations` creates the organization and bootstraps the authenticated Supabase user as `OWNER`.
 - `GET /organizations/{id}` requires membership in that organization.
-- `POST /organizations/{id}/users` requires `OWNER` or `ADMIN`.
-- `GET /organizations/{id}/users` requires `OWNER` or `ADMIN`.
-- `GET /users/{id}` allows the user themself, or `OWNER`/`ADMIN` in that organization.
+- `POST /organizations/{id}/memberships` requires `OWNER` or `ADMIN`.
+- `GET /organizations/{id}/memberships` requires `OWNER` or `ADMIN`.
+- `GET /memberships/{id}` allows the member themself, or `OWNER`/`ADMIN` in that organization.
 - `POST /organizations/{id}/invitations` requires `OWNER` or `ADMIN`.
 - `GET /organizations/{id}/invitations` requires `OWNER` or `ADMIN`.
 - `DELETE /organizations/{id}/invitations/{invitationId}` requires `OWNER` or `ADMIN`.
@@ -190,23 +186,23 @@ $assessment = Invoke-RestMethod -Method Post `
   -Body (@{ organizationId = $org.id; name = "Initial ISO 27001 readiness assessment" } | ConvertTo-Json)
 ```
 
-Create organization user:
+Create organization membership:
 
 ```powershell
-$user = Invoke-RestMethod -Method Post `
-  -Uri "http://localhost:8080/organizations/$($org.id)/users" `
+$membership = Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8080/organizations/$($org.id)/memberships" `
   -Headers $headers `
   -ContentType "application/json" `
   -Body '{"email":"auditor@example.com","role":"AUDITOR","supabaseUserId":"<supabase-auth-user-id>"}'
 ```
 
-List organization users:
+List organization memberships:
 
 ```powershell
-Invoke-RestMethod "http://localhost:8080/organizations/$($org.id)/users" -Headers $headers
+Invoke-RestMethod "http://localhost:8080/organizations/$($org.id)/memberships" -Headers $headers
 ```
 
-Invite organization user:
+Invite organization member:
 
 ```powershell
 $invite = Invoke-RestMethod -Method Post `
@@ -303,6 +299,13 @@ se.iso27001platform.iso27001backend
     model
     repository
     service
+  membership
+    controller
+    dto
+    enums
+    model
+    repository
+    service
   organization
     controller
     dto
@@ -310,9 +313,7 @@ se.iso27001platform.iso27001backend
     repository
     service
   user
-    controller
     dto
-    enums
     model
     repository
     service

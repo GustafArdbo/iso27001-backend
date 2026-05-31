@@ -1,15 +1,15 @@
 package se.iso27001platform.iso27001backend.invitation.dto;
 
 import se.iso27001platform.iso27001backend.invitation.model.OrganizationInvitation;
-import se.iso27001platform.iso27001backend.user.dto.UserResponse;
-import se.iso27001platform.iso27001backend.user.model.AppUser;
+import se.iso27001platform.iso27001backend.membership.dto.MembershipResponse;
+import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
 
 public record AcceptInvitationResponse(
 		InvitationResponse invitation,
-		UserResponse user
+		MembershipResponse membership
 ) {
 
-	public static AcceptInvitationResponse from(OrganizationInvitation invitation, AppUser user) {
-		return new AcceptInvitationResponse(InvitationResponse.from(invitation), UserResponse.from(user));
+	public static AcceptInvitationResponse from(OrganizationInvitation invitation, OrganizationMembership membership) {
+		return new AcceptInvitationResponse(InvitationResponse.from(invitation), MembershipResponse.from(membership));
 	}
 }

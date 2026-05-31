@@ -10,11 +10,13 @@ import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
+import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
+import se.iso27001platform.iso27001backend.membership.repository.OrganizationMembershipRepository;
 import se.iso27001platform.iso27001backend.organization.model.Organization;
 import se.iso27001platform.iso27001backend.organization.service.OrganizationService;
-import se.iso27001platform.iso27001backend.user.enums.UserRole;
-import se.iso27001platform.iso27001backend.user.model.AppUser;
-import se.iso27001platform.iso27001backend.user.repository.AppUserRepository;
+import se.iso27001platform.iso27001backend.user.model.UserProfile;
+import se.iso27001platform.iso27001backend.user.service.UserProfileService;
 
 import java.time.Instant;
 import java.util.Locale;
@@ -44,7 +46,10 @@ class Iso27001backendApplicationTests {
 	private OrganizationService organizationService;
 
 	@Autowired
-	private AppUserRepository appUserRepository;
+	private OrganizationMembershipRepository membershipRepository;
+
+	@Autowired
+	private UserProfileService userProfileService;
 
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -108,7 +113,7 @@ class Iso27001backendApplicationTests {
 	void createsOrganizationWithCurrentUserAsOwner() throws Exception {
 		UUID organizationId = createOrganization("Bootstrap Owner AB");
 
-		mockMvc.perform(get("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(get("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.length()").value(1))
@@ -119,8 +124,26 @@ class Iso27001backendApplicationTests {
 	}
 
 	@Test
+	void reusesUserProfileAcrossOrganizationMemberships() throws Exception {
+		UUID firstOrganizationId = createOrganization("First Profile Organization AB");
+		UUID secondOrganizationId = createOrganization("Second Profile Organization AB");
+
+		JsonNode firstMembership = findMembership(firstOrganizationId, OWNER_SUPABASE_USER_ID);
+		JsonNode secondMembership = findMembership(secondOrganizationId, OWNER_SUPABASE_USER_ID);
+
+		assertTrue(
+				firstMembership.get("userProfileId").asText().equals(secondMembership.get("userProfileId").asText()),
+				"Expected the same Supabase identity to reuse one global user profile"
+		);
+		assertTrue(
+				!firstMembership.get("id").asText().equals(secondMembership.get("id").asText()),
+				"Expected separate organization memberships for the same global user profile"
+		);
+	}
+
+	@Test
 	void createsAssessmentFlow() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Acme Security AB", AUDITOR_SUPABASE_USER_ID, UserRole.AUDITOR);
+		UUID organizationId = createOrganizationWithMembership("Acme Security AB", AUDITOR_SUPABASE_USER_ID, MembershipRole.AUDITOR);
 
 		UUID assessmentId = createAssessment(organizationId, "Initial ISO 27001 gap analysis", AUDITOR_SUPABASE_USER_ID);
 
@@ -172,7 +195,7 @@ class Iso27001backendApplicationTests {
 
 	@Test
 	void protectsAssessmentReadEndpointsByOrganizationMembership() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Assessment Access AB", AUDITOR_SUPABASE_USER_ID, UserRole.AUDITOR);
+		UUID organizationId = createOrganizationWithMembership("Assessment Access AB", AUDITOR_SUPABASE_USER_ID, MembershipRole.AUDITOR);
 		UUID assessmentId = createAssessment(organizationId, "Protected assessment", AUDITOR_SUPABASE_USER_ID);
 
 		mockMvc.perform(get("/assessments/{id}", assessmentId)
@@ -190,7 +213,7 @@ class Iso27001backendApplicationTests {
 
 	@Test
 	void memberCanSubmitAnswersButCannotCreateAssessment() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Member Answer AB", VIEWER_SUPABASE_USER_ID, UserRole.MEMBER);
+		UUID organizationId = createOrganizationWithMembership("Member Answer AB", VIEWER_SUPABASE_USER_ID, MembershipRole.MEMBER);
 		UUID assessmentId = createAssessment(organizationId, "Owner-created assessment", OWNER_SUPABASE_USER_ID);
 
 		mockMvc.perform(post("/assessments")
@@ -286,7 +309,7 @@ class Iso27001backendApplicationTests {
 
 	@Test
 	void rejectsUnknownControlAnswer() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Unknown Control AB", AUDITOR_SUPABASE_USER_ID, UserRole.AUDITOR);
+		UUID organizationId = createOrganizationWithMembership("Unknown Control AB", AUDITOR_SUPABASE_USER_ID, MembershipRole.AUDITOR);
 
 		UUID assessmentId = createAssessment(organizationId, "Control validation", AUDITOR_SUPABASE_USER_ID);
 
@@ -316,10 +339,10 @@ class Iso27001backendApplicationTests {
 	}
 
 	@Test
-	void createsOrganizationUserFlow() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("User Flow AB", OWNER_SUPABASE_USER_ID, UserRole.OWNER);
+	void createsOrganizationMembershipFlow() throws Exception {
+		UUID organizationId = createOrganizationWithMembership("User Flow AB", OWNER_SUPABASE_USER_ID, MembershipRole.OWNER);
 
-		String userResponse = mockMvc.perform(post("/organizations/{organizationId}/users", organizationId)
+		String membershipResponse = mockMvc.perform(post("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
@@ -334,38 +357,39 @@ class Iso27001backendApplicationTests {
 				.getResponse()
 				.getContentAsString();
 
-		UUID userId = readId(userResponse);
+		UUID membershipId = readId(membershipResponse);
 
-		mockMvc.perform(get("/users/{id}", userId)
+		mockMvc.perform(get("/memberships/{id}", membershipId)
 						.with(authenticatedJwt(AUDITOR_SUPABASE_USER_ID)))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.id").value(userId.toString()))
+				.andExpect(jsonPath("$.id").value(membershipId.toString()))
 				.andExpect(jsonPath("$.email").value("auditor@example.com"));
 
-		mockMvc.perform(get("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(get("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.length()").value(2))
-				.andExpect(jsonPath("$[1].id").value(userId.toString()));
+				.andExpect(jsonPath("$[1].id").value(membershipId.toString()));
 
 		String authMeResponse = mockMvc.perform(get("/auth/me")
 						.with(authenticatedJwt("membership-token", AUDITOR_SUPABASE_USER_ID, UUID.randomUUID(), UUID.randomUUID().toString())))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.subject").value(AUDITOR_SUPABASE_USER_ID.toString()))
+				.andExpect(jsonPath("$.profile.supabaseUserId").value(AUDITOR_SUPABASE_USER_ID.toString()))
 				.andReturn()
 				.getResponse()
 				.getContentAsString();
 		assertTrue(
-				containsMembership(readJson(authMeResponse).get("memberships"), userId, organizationId),
+				containsMembership(readJson(authMeResponse).get("memberships"), membershipId, organizationId),
 				"Expected /auth/me to include the newly created organization membership"
 		);
 	}
 
 	@Test
-	void enforcesUserManagementRoleRulesAndSupabaseUniqueness() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("User Rules AB", VIEWER_SUPABASE_USER_ID, UserRole.VIEWER);
+	void enforcesMembershipManagementRoleRulesAndSupabaseUniqueness() throws Exception {
+		UUID organizationId = createOrganizationWithMembership("User Rules AB", VIEWER_SUPABASE_USER_ID, MembershipRole.VIEWER);
 
-		mockMvc.perform(post("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(post("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(VIEWER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
@@ -373,29 +397,29 @@ class Iso27001backendApplicationTests {
 								"""))
 				.andExpect(status().isForbidden());
 
-		JsonNode createdUser = createUser(
+		JsonNode createdMembership = createMembership(
 				organizationId,
 				"auditor@example.com",
 				AUDITOR_SUPABASE_USER_ID,
-				UserRole.AUDITOR,
+				MembershipRole.AUDITOR,
 				OWNER_SUPABASE_USER_ID
 		);
-		UUID userId = UUID.fromString(createdUser.get("id").asText());
+		UUID membershipId = UUID.fromString(createdMembership.get("id").asText());
 
-		mockMvc.perform(post("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(post("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
 								{"email":"second-auditor@example.com","supabaseUserId":"%s","role":"AUDITOR"}
 								""".formatted(AUDITOR_SUPABASE_USER_ID)))
 				.andExpect(status().isConflict())
-				.andExpect(jsonPath("$.message").value("Supabase user already exists in organization: " + AUDITOR_SUPABASE_USER_ID));
+				.andExpect(jsonPath("$.message").value("Membership already exists in organization for Supabase user: " + AUDITOR_SUPABASE_USER_ID));
 
-		mockMvc.perform(get("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(get("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(VIEWER_SUPABASE_USER_ID)))
 				.andExpect(status().isForbidden());
 
-		mockMvc.perform(get("/users/{id}", userId)
+		mockMvc.perform(get("/memberships/{id}", membershipId)
 						.with(authenticatedJwt(OUTSIDER_SUPABASE_USER_ID)))
 				.andExpect(status().isForbidden());
 	}
@@ -430,13 +454,13 @@ class Iso27001backendApplicationTests {
 								""".formatted(token)))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.invitation.status").value("ACCEPTED"))
-				.andExpect(jsonPath("$.invitation.acceptedByUserId").isNotEmpty())
-				.andExpect(jsonPath("$.user.organizationId").value(organizationId.toString()))
-				.andExpect(jsonPath("$.user.email").value("auditor@example.com"))
-				.andExpect(jsonPath("$.user.supabaseUserId").value(AUDITOR_SUPABASE_USER_ID.toString()))
-				.andExpect(jsonPath("$.user.role").value("AUDITOR"));
+				.andExpect(jsonPath("$.invitation.acceptedByMembershipId").isNotEmpty())
+				.andExpect(jsonPath("$.membership.organizationId").value(organizationId.toString()))
+				.andExpect(jsonPath("$.membership.email").value("auditor@example.com"))
+				.andExpect(jsonPath("$.membership.supabaseUserId").value(AUDITOR_SUPABASE_USER_ID.toString()))
+				.andExpect(jsonPath("$.membership.role").value("AUDITOR"));
 
-		mockMvc.perform(get("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(get("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.length()").value(2))
@@ -452,7 +476,7 @@ class Iso27001backendApplicationTests {
 	@Test
 	void rejectsDuplicatePendingInvitationAndTokenReuse() throws Exception {
 		UUID organizationId = createOrganization("Invitation Duplicate AB");
-		String token = createInvitation(organizationId, "auditor@example.com", UserRole.AUDITOR, OWNER_SUPABASE_USER_ID)
+		String token = createInvitation(organizationId, "auditor@example.com", MembershipRole.AUDITOR, OWNER_SUPABASE_USER_ID)
 				.get("acceptanceToken")
 				.asText();
 
@@ -487,11 +511,11 @@ class Iso27001backendApplicationTests {
 	@Test
 	void rejectsInvitationForExistingUserAndUnknownToken() throws Exception {
 		UUID organizationId = createOrganization("Invitation Existing User AB");
-		createUser(
+		createMembership(
 				organizationId,
 				"auditor@example.com",
 				AUDITOR_SUPABASE_USER_ID,
-				UserRole.AUDITOR,
+				MembershipRole.AUDITOR,
 				OWNER_SUPABASE_USER_ID
 		);
 
@@ -502,7 +526,7 @@ class Iso27001backendApplicationTests {
 								{"email":"AUDITOR@example.com","role":"AUDITOR"}
 								"""))
 				.andExpect(status().isConflict())
-				.andExpect(jsonPath("$.message").value("User already exists in organization: auditor@example.com"));
+				.andExpect(jsonPath("$.message").value("Membership already exists in organization for email: auditor@example.com"));
 
 		mockMvc.perform(post("/invitations/accept")
 						.with(authenticatedJwt(AUDITOR_SUPABASE_USER_ID))
@@ -516,8 +540,8 @@ class Iso27001backendApplicationTests {
 
 	@Test
 	void protectsInvitationManagementEndpointsByRoleAndOrganization() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Invitation Access AB", VIEWER_SUPABASE_USER_ID, UserRole.VIEWER);
-		JsonNode invitation = createInvitation(organizationId, "auditor@example.com", UserRole.AUDITOR, OWNER_SUPABASE_USER_ID);
+		UUID organizationId = createOrganizationWithMembership("Invitation Access AB", VIEWER_SUPABASE_USER_ID, MembershipRole.VIEWER);
+		JsonNode invitation = createInvitation(organizationId, "auditor@example.com", MembershipRole.AUDITOR, OWNER_SUPABASE_USER_ID);
 		UUID invitationId = UUID.fromString(invitation.get("invitation").get("id").asText());
 
 		mockMvc.perform(get("/organizations/{organizationId}/invitations", organizationId)
@@ -540,7 +564,7 @@ class Iso27001backendApplicationTests {
 	@Test
 	void rejectsInvitationAcceptForDifferentEmail() throws Exception {
 		UUID organizationId = createOrganization("Invitation Email AB");
-		String token = createInvitation(organizationId, "auditor@example.com", UserRole.AUDITOR, OWNER_SUPABASE_USER_ID)
+		String token = createInvitation(organizationId, "auditor@example.com", MembershipRole.AUDITOR, OWNER_SUPABASE_USER_ID)
 				.get("acceptanceToken")
 				.asText();
 
@@ -560,7 +584,7 @@ class Iso27001backendApplicationTests {
 		JsonNode invitationResponse = createInvitation(
 				organizationId,
 				"auditor@example.com",
-				UserRole.AUDITOR,
+				MembershipRole.AUDITOR,
 				OWNER_SUPABASE_USER_ID
 		);
 		UUID invitationId = UUID.fromString(invitationResponse.get("invitation").get("id").asText());
@@ -587,7 +611,7 @@ class Iso27001backendApplicationTests {
 
 	@Test
 	void preventsAdminFromInvitingOwner() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Invitation Roles AB", AUDITOR_SUPABASE_USER_ID, UserRole.ADMIN);
+		UUID organizationId = createOrganizationWithMembership("Invitation Roles AB", AUDITOR_SUPABASE_USER_ID, MembershipRole.ADMIN);
 
 		mockMvc.perform(post("/organizations/{organizationId}/invitations", organizationId)
 						.with(authenticatedJwt(AUDITOR_SUPABASE_USER_ID))
@@ -600,10 +624,10 @@ class Iso27001backendApplicationTests {
 	}
 
 	@Test
-	void rejectsDuplicateOrganizationUser() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Duplicate User AB", OWNER_SUPABASE_USER_ID, UserRole.OWNER);
+	void rejectsDuplicateOrganizationMembership() throws Exception {
+		UUID organizationId = createOrganizationWithMembership("Duplicate User AB", OWNER_SUPABASE_USER_ID, MembershipRole.OWNER);
 
-		mockMvc.perform(post("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(post("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
@@ -611,21 +635,21 @@ class Iso27001backendApplicationTests {
 								"""))
 				.andExpect(status().isCreated());
 
-		mockMvc.perform(post("/organizations/{organizationId}/users", organizationId)
+		mockMvc.perform(post("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
 								{"email":"ADMIN@example.com","role":"ADMIN"}
 								"""))
 				.andExpect(status().isConflict())
-				.andExpect(jsonPath("$.message").value("User already exists in organization: admin@example.com"));
+				.andExpect(jsonPath("$.message").value("Membership already exists in organization for email: admin@example.com"));
 	}
 
 	@Test
-	void rejectsUserForMissingOrganization() throws Exception {
+	void rejectsMembershipForMissingOrganization() throws Exception {
 		UUID missingOrganizationId = UUID.randomUUID();
 
-		mockMvc.perform(post("/organizations/{organizationId}/users", missingOrganizationId)
+		mockMvc.perform(post("/organizations/{organizationId}/memberships", missingOrganizationId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
@@ -711,7 +735,7 @@ class Iso27001backendApplicationTests {
 
 	@Test
 	void rejectsCrossOrganizationAccess() throws Exception {
-		UUID organizationAId = createOrganizationWithMembership("Organization A", OWNER_SUPABASE_USER_ID, UserRole.OWNER);
+		UUID organizationAId = createOrganizationWithMembership("Organization A", OWNER_SUPABASE_USER_ID, MembershipRole.OWNER);
 		UUID organizationBId = createOrganization("Organization B", AUDITOR_SUPABASE_USER_ID);
 
 		mockMvc.perform(get("/organizations/{id}", organizationAId)
@@ -730,8 +754,8 @@ class Iso27001backendApplicationTests {
 
 	@Test
 	void enforcesAssessmentRoleRules() throws Exception {
-		UUID organizationId = createOrganizationWithMembership("Role Rules AB", AUDITOR_SUPABASE_USER_ID, UserRole.AUDITOR);
-		addMembership(organizationId, VIEWER_SUPABASE_USER_ID, UserRole.VIEWER);
+		UUID organizationId = createOrganizationWithMembership("Role Rules AB", AUDITOR_SUPABASE_USER_ID, MembershipRole.AUDITOR);
+		addMembership(organizationId, VIEWER_SUPABASE_USER_ID, MembershipRole.VIEWER);
 
 		mockMvc.perform(post("/assessments")
 						.with(authenticatedJwt(VIEWER_SUPABASE_USER_ID))
@@ -773,7 +797,7 @@ class Iso27001backendApplicationTests {
 		return readId(organizationResponse);
 	}
 
-	private UUID createOrganizationWithMembership(String name, UUID supabaseUserId, UserRole role) throws Exception {
+	private UUID createOrganizationWithMembership(String name, UUID supabaseUserId, MembershipRole role) throws Exception {
 		UUID organizationId = createOrganization(name);
 		addMembership(organizationId, supabaseUserId, role);
 		return organizationId;
@@ -796,13 +820,14 @@ class Iso27001backendApplicationTests {
 		return readId(assessmentResponse);
 	}
 
-	private void addMembership(UUID organizationId, UUID supabaseUserId, UserRole role) {
-		if (appUserRepository.existsByOrganization_IdAndSupabaseUserId(organizationId, supabaseUserId)) {
+	private void addMembership(UUID organizationId, UUID supabaseUserId, MembershipRole role) {
+		if (membershipRepository.existsByOrganization_IdAndUserProfile_SupabaseUserId(organizationId, supabaseUserId)) {
 			return;
 		}
 		Organization organization = organizationService.getRequired(organizationId);
-		String email = role.name().toLowerCase() + "-" + supabaseUserId + "@example.com";
-		appUserRepository.save(new AppUser(organization, email, supabaseUserId, role));
+		String email = emailFor(supabaseUserId);
+		UserProfile userProfile = userProfileService.getOrCreateForMembership(supabaseUserId, email);
+		membershipRepository.save(new OrganizationMembership(organization, userProfile, role));
 	}
 
 	private void submitAnswer(UUID assessmentId, String controlId, String answer, UUID supabaseUserId) throws Exception {
@@ -821,9 +846,9 @@ class Iso27001backendApplicationTests {
 		return UUID.fromString(readJson(json).get("id").asText());
 	}
 
-	private JsonNode createUser(UUID organizationId, String email, UUID supabaseUserId, UserRole role, UUID actorSupabaseUserId)
+	private JsonNode createMembership(UUID organizationId, String email, UUID supabaseUserId, MembershipRole role, UUID actorSupabaseUserId)
 			throws Exception {
-		String userResponse = mockMvc.perform(post("/organizations/{organizationId}/users", organizationId)
+		String membershipResponse = mockMvc.perform(post("/organizations/{organizationId}/memberships", organizationId)
 						.with(authenticatedJwt(actorSupabaseUserId))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
@@ -834,10 +859,10 @@ class Iso27001backendApplicationTests {
 				.getResponse()
 				.getContentAsString();
 
-		return readJson(userResponse);
+		return readJson(membershipResponse);
 	}
 
-	private JsonNode createInvitation(UUID organizationId, String email, UserRole role, UUID inviterSupabaseUserId) throws Exception {
+	private JsonNode createInvitation(UUID organizationId, String email, MembershipRole role, UUID inviterSupabaseUserId) throws Exception {
 		String invitationResponse = mockMvc.perform(post("/organizations/{organizationId}/invitations", organizationId)
 						.with(authenticatedJwt(inviterSupabaseUserId))
 						.contentType(MediaType.APPLICATION_JSON)
@@ -856,9 +881,25 @@ class Iso27001backendApplicationTests {
 		return objectMapper.readTree(json);
 	}
 
-	private boolean containsMembership(JsonNode memberships, UUID userId, UUID organizationId) {
+	private JsonNode findMembership(UUID organizationId, UUID supabaseUserId) throws Exception {
+		String membershipsResponse = mockMvc.perform(get("/organizations/{organizationId}/memberships", organizationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		for (JsonNode membership : readJson(membershipsResponse)) {
+			if (supabaseUserId.toString().equals(membership.get("supabaseUserId").asText())) {
+				return membership;
+			}
+		}
+		throw new AssertionError("Expected membership for Supabase user: " + supabaseUserId);
+	}
+
+	private boolean containsMembership(JsonNode memberships, UUID membershipId, UUID organizationId) {
 		for (JsonNode membership : memberships) {
-			if (userId.toString().equals(membership.get("userId").asText())
+			if (membershipId.toString().equals(membership.get("membershipId").asText())
 					&& organizationId.toString().equals(membership.get("organizationId").asText())) {
 				return true;
 			}

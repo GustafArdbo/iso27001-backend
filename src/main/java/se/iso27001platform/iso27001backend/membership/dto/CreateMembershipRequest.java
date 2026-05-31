@@ -1,19 +1,19 @@
-package se.iso27001platform.iso27001backend.user.dto;
+package se.iso27001platform.iso27001backend.membership.dto;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import se.iso27001platform.iso27001backend.user.enums.UserRole;
+import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
 
 import java.util.UUID;
 
-public record CreateUserRequest(
+public record CreateMembershipRequest(
 		@NotBlank @Email String email,
 		UUID supabaseUserId,
-		@NotNull UserRole role
+		@NotNull MembershipRole role
 ) {
 
-	public CreateUserRequest {
+	public CreateMembershipRequest {
 		if (email != null) {
 			email = email.trim();
 		}

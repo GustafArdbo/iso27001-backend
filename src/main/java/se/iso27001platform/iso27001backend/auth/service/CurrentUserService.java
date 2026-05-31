@@ -7,8 +7,8 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import se.iso27001platform.iso27001backend.user.model.AppUser;
-import se.iso27001platform.iso27001backend.user.repository.AppUserRepository;
+import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
+import se.iso27001platform.iso27001backend.membership.repository.OrganizationMembershipRepository;
 
 import java.util.List;
 import java.util.Locale;
@@ -18,10 +18,10 @@ import java.util.UUID;
 @Service
 public class CurrentUserService {
 
-	private final AppUserRepository appUserRepository;
+	private final OrganizationMembershipRepository membershipRepository;
 
-	public CurrentUserService(AppUserRepository appUserRepository) {
-		this.appUserRepository = appUserRepository;
+	public CurrentUserService(OrganizationMembershipRepository membershipRepository) {
+		this.membershipRepository = membershipRepository;
 	}
 
 	public Jwt currentJwt() {
@@ -51,12 +51,15 @@ public class CurrentUserService {
 	}
 
 	@Transactional(readOnly = true)
-	public List<AppUser> currentMemberships() {
-		return appUserRepository.findBySupabaseUserIdOrderByCreatedAtAsc(currentSupabaseUserId());
+	public List<OrganizationMembership> currentMemberships() {
+		return membershipRepository.findByUserProfile_SupabaseUserIdOrderByCreatedAtAsc(currentSupabaseUserId());
 	}
 
 	@Transactional(readOnly = true)
-	public Optional<AppUser> currentMembership(UUID organizationId) {
-		return appUserRepository.findByOrganization_IdAndSupabaseUserId(organizationId, currentSupabaseUserId());
+	public Optional<OrganizationMembership> currentMembership(UUID organizationId) {
+		return membershipRepository.findByOrganization_IdAndUserProfile_SupabaseUserId(
+				organizationId,
+				currentSupabaseUserId()
+		);
 	}
 }

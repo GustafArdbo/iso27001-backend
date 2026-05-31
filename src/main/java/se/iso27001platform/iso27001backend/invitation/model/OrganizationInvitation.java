@@ -10,9 +10,9 @@ import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 import se.iso27001platform.iso27001backend.common.model.BaseEntity;
 import se.iso27001platform.iso27001backend.invitation.enums.InvitationStatus;
+import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
+import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
 import se.iso27001platform.iso27001backend.organization.model.Organization;
-import se.iso27001platform.iso27001backend.user.enums.UserRole;
-import se.iso27001platform.iso27001backend.user.model.AppUser;
 
 import java.time.Instant;
 
@@ -29,7 +29,7 @@ public class OrganizationInvitation extends BaseEntity {
 
 	@Enumerated(EnumType.STRING)
 	@Column(nullable = false)
-	private UserRole role;
+	private MembershipRole role;
 
 	@Column(name = "token_hash", nullable = false, updatable = false)
 	private String tokenHash;
@@ -48,16 +48,16 @@ public class OrganizationInvitation extends BaseEntity {
 	private Instant revokedAt;
 
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
-	@JoinColumn(name = "invited_by_user_id", nullable = false)
-	private AppUser invitedByUser;
+	@JoinColumn(name = "invited_by_membership_id", nullable = false)
+	private OrganizationMembership invitedByMembership;
 
 	@ManyToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "accepted_by_user_id")
-	private AppUser acceptedByUser;
+	@JoinColumn(name = "accepted_by_membership_id")
+	private OrganizationMembership acceptedByMembership;
 
 	@ManyToOne(fetch = FetchType.LAZY)
-	@JoinColumn(name = "revoked_by_user_id")
-	private AppUser revokedByUser;
+	@JoinColumn(name = "revoked_by_membership_id")
+	private OrganizationMembership revokedByMembership;
 
 	protected OrganizationInvitation() {
 	}
@@ -65,10 +65,10 @@ public class OrganizationInvitation extends BaseEntity {
 	public OrganizationInvitation(
 			Organization organization,
 			String email,
-			UserRole role,
+			MembershipRole role,
 			String tokenHash,
 			Instant expiresAt,
-			AppUser invitedByUser
+			OrganizationMembership invitedByMembership
 	) {
 		this.organization = organization;
 		this.email = email;
@@ -76,7 +76,7 @@ public class OrganizationInvitation extends BaseEntity {
 		this.tokenHash = tokenHash;
 		this.status = InvitationStatus.PENDING;
 		this.expiresAt = expiresAt;
-		this.invitedByUser = invitedByUser;
+		this.invitedByMembership = invitedByMembership;
 	}
 
 	public Organization getOrganization() {
@@ -87,7 +87,7 @@ public class OrganizationInvitation extends BaseEntity {
 		return email;
 	}
 
-	public UserRole getRole() {
+	public MembershipRole getRole() {
 		return role;
 	}
 
@@ -111,31 +111,31 @@ public class OrganizationInvitation extends BaseEntity {
 		return revokedAt;
 	}
 
-	public AppUser getInvitedByUser() {
-		return invitedByUser;
+	public OrganizationMembership getInvitedByMembership() {
+		return invitedByMembership;
 	}
 
-	public AppUser getAcceptedByUser() {
-		return acceptedByUser;
+	public OrganizationMembership getAcceptedByMembership() {
+		return acceptedByMembership;
 	}
 
-	public AppUser getRevokedByUser() {
-		return revokedByUser;
+	public OrganizationMembership getRevokedByMembership() {
+		return revokedByMembership;
 	}
 
 	public boolean isExpiredAt(Instant now) {
 		return status == InvitationStatus.PENDING && !expiresAt.isAfter(now);
 	}
 
-	public void markAccepted(AppUser acceptedByUser, Instant acceptedAt) {
+	public void markAccepted(OrganizationMembership acceptedByMembership, Instant acceptedAt) {
 		this.status = InvitationStatus.ACCEPTED;
-		this.acceptedByUser = acceptedByUser;
+		this.acceptedByMembership = acceptedByMembership;
 		this.acceptedAt = acceptedAt;
 	}
 
-	public void markRevoked(AppUser revokedByUser, Instant revokedAt) {
+	public void markRevoked(OrganizationMembership revokedByMembership, Instant revokedAt) {
 		this.status = InvitationStatus.REVOKED;
-		this.revokedByUser = revokedByUser;
+		this.revokedByMembership = revokedByMembership;
 		this.revokedAt = revokedAt;
 	}
 

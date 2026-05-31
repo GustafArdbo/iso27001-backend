@@ -2,8 +2,8 @@ package se.iso27001platform.iso27001backend.invitation.dto;
 
 import se.iso27001platform.iso27001backend.invitation.enums.InvitationStatus;
 import se.iso27001platform.iso27001backend.invitation.model.OrganizationInvitation;
-import se.iso27001platform.iso27001backend.user.enums.UserRole;
-import se.iso27001platform.iso27001backend.user.model.AppUser;
+import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
+import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -12,14 +12,14 @@ public record InvitationResponse(
 		UUID id,
 		UUID organizationId,
 		String email,
-		UserRole role,
+		MembershipRole role,
 		InvitationStatus status,
 		Instant expiresAt,
 		Instant acceptedAt,
 		Instant revokedAt,
-		UUID invitedByUserId,
-		UUID acceptedByUserId,
-		UUID revokedByUserId,
+		UUID invitedByMembershipId,
+		UUID acceptedByMembershipId,
+		UUID revokedByMembershipId,
 		Instant createdAt
 ) {
 
@@ -33,14 +33,14 @@ public record InvitationResponse(
 				invitation.getExpiresAt(),
 				invitation.getAcceptedAt(),
 				invitation.getRevokedAt(),
-				invitation.getInvitedByUser().getId(),
-				userId(invitation.getAcceptedByUser()),
-				userId(invitation.getRevokedByUser()),
+				invitation.getInvitedByMembership().getId(),
+				membershipId(invitation.getAcceptedByMembership()),
+				membershipId(invitation.getRevokedByMembership()),
 				invitation.getCreatedAt()
 		);
 	}
 
-	private static UUID userId(AppUser user) {
-		return user == null ? null : user.getId();
+	private static UUID membershipId(OrganizationMembership membership) {
+		return membership == null ? null : membership.getId();
 	}
 }

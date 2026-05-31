@@ -14,12 +14,14 @@ import se.iso27001platform.iso27001backend.invitation.dto.InvitationResponse;
 import se.iso27001platform.iso27001backend.invitation.enums.InvitationStatus;
 import se.iso27001platform.iso27001backend.invitation.model.OrganizationInvitation;
 import se.iso27001platform.iso27001backend.invitation.repository.OrganizationInvitationRepository;
+import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
+import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
+import se.iso27001platform.iso27001backend.membership.repository.OrganizationMembershipRepository;
 import se.iso27001platform.iso27001backend.organization.model.Organization;
 import se.iso27001platform.iso27001backend.organization.service.OrganizationAccessService;
 import se.iso27001platform.iso27001backend.organization.service.OrganizationService;
-import se.iso27001platform.iso27001backend.user.enums.UserRole;
-import se.iso27001platform.iso27001backend.user.model.AppUser;
-import se.iso27001platform.iso27001backend.user.repository.AppUserRepository;
+import se.iso27001platform.iso27001backend.user.model.UserProfile;
+import se.iso27001platform.iso27001backend.user.service.UserProfileService;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -36,7 +38,8 @@ public class InvitationService {
 	private final OrganizationInvitationRepository invitationRepository;
 	private final OrganizationService organizationService;
 	private final OrganizationAccessService organizationAccessService;
-	private final AppUserRepository appUserRepository;
+	private final OrganizationMembershipRepository membershipRepository;
+	private final UserProfileService userProfileService;
 	private final CurrentUserService currentUserService;
 	private final InvitationTokenService invitationTokenService;
 
@@ -44,26 +47,28 @@ public class InvitationService {
 			OrganizationInvitationRepository invitationRepository,
 			OrganizationService organizationService,
 			OrganizationAccessService organizationAccessService,
-			AppUserRepository appUserRepository,
+			OrganizationMembershipRepository membershipRepository,
+			UserProfileService userProfileService,
 			CurrentUserService currentUserService,
 			InvitationTokenService invitationTokenService
 	) {
 		this.invitationRepository = invitationRepository;
 		this.organizationService = organizationService;
 		this.organizationAccessService = organizationAccessService;
-		this.appUserRepository = appUserRepository;
+		this.membershipRepository = membershipRepository;
+		this.userProfileService = userProfileService;
 		this.currentUserService = currentUserService;
 		this.invitationTokenService = invitationTokenService;
 	}
 
 	public CreateInvitationResponse create(UUID organizationId, CreateInvitationRequest request) {
 		Organization organization = organizationService.getRequired(organizationId);
-		AppUser invitedByUser = organizationAccessService.requireOwnerOrAdmin(organizationId);
-		requireRoleCanInvite(invitedByUser.getRole(), request.role());
+		OrganizationMembership invitedByMembership = organizationAccessService.requireOwnerOrAdmin(organizationId);
+		requireRoleCanInvite(invitedByMembership.getRole(), request.role());
 
 		String email = normalizeEmail(request.email());
-		if (appUserRepository.existsByOrganization_IdAndEmail(organizationId, email)) {
-			throw new DuplicateResourceException("User already exists in organization: " + email);
+		if (membershipRepository.existsByOrganization_IdAndUserProfile_Email(organizationId, email)) {
+			throw new DuplicateResourceException("Membership already exists in organization for email: " + email);
 		}
 
 		Instant now = Instant.now();
@@ -78,7 +83,7 @@ public class InvitationService {
 				request.role(),
 				invitationTokenService.hashToken(token),
 				now.plus(INVITATION_TTL),
-				invitedByUser
+				invitedByMembership
 		));
 
 		return CreateInvitationResponse.from(invitation, token);
@@ -116,27 +121,30 @@ public class InvitationService {
 
 		UUID organizationId = invitation.getOrganization().getId();
 		UUID currentSupabaseUserId = currentUserService.currentSupabaseUserId();
-		if (appUserRepository.existsByOrganization_IdAndEmail(organizationId, currentEmail)) {
-			throw new DuplicateResourceException("User already exists in organization: " + currentEmail);
+		if (membershipRepository.existsByOrganization_IdAndUserProfile_Email(organizationId, currentEmail)) {
+			throw new DuplicateResourceException("Membership already exists in organization for email: " + currentEmail);
 		}
-		if (appUserRepository.existsByOrganization_IdAndSupabaseUserId(organizationId, currentSupabaseUserId)) {
-			throw new DuplicateResourceException("Supabase user already exists in organization: " + currentSupabaseUserId);
+		if (membershipRepository.existsByOrganization_IdAndUserProfile_SupabaseUserId(
+				organizationId,
+				currentSupabaseUserId
+		)) {
+			throw new DuplicateResourceException("Membership already exists in organization for Supabase user: " + currentSupabaseUserId);
 		}
 
-		AppUser appUser = appUserRepository.save(new AppUser(
+		UserProfile userProfile = userProfileService.getOrCreate(currentSupabaseUserId, currentEmail);
+		OrganizationMembership membership = membershipRepository.save(new OrganizationMembership(
 				invitation.getOrganization(),
-				currentEmail,
-				currentSupabaseUserId,
+				userProfile,
 				invitation.getRole()
 		));
-		invitation.markAccepted(appUser, now);
+		invitation.markAccepted(membership, now);
 
-		return AcceptInvitationResponse.from(invitation, appUser);
+		return AcceptInvitationResponse.from(invitation, membership);
 	}
 
 	public void revoke(UUID organizationId, UUID invitationId) {
 		organizationService.getRequired(organizationId);
-		AppUser revokedByUser = organizationAccessService.requireOwnerOrAdmin(organizationId);
+		OrganizationMembership revokedByMembership = organizationAccessService.requireOwnerOrAdmin(organizationId);
 		OrganizationInvitation invitation = invitationRepository.findByOrganization_IdAndId(organizationId, invitationId)
 				.orElseThrow(() -> new ResourceNotFoundException("Invitation not found: " + invitationId));
 
@@ -149,11 +157,11 @@ public class InvitationService {
 			throw new BadRequestException("Invitation is not pending");
 		}
 
-		invitation.markRevoked(revokedByUser, now);
+		invitation.markRevoked(revokedByMembership, now);
 	}
 
-	private void requireRoleCanInvite(UserRole currentRole, UserRole invitedRole) {
-		if (currentRole == UserRole.ADMIN && invitedRole == UserRole.OWNER) {
+	private void requireRoleCanInvite(MembershipRole currentRole, MembershipRole invitedRole) {
+		if (currentRole == MembershipRole.ADMIN && invitedRole == MembershipRole.OWNER) {
 			throw new AccessDeniedException("Admins cannot invite owners");
 		}
 	}

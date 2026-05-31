@@ -5,17 +5,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import se.iso27001platform.iso27001backend.auth.dto.AuthMembershipResponse;
 import se.iso27001platform.iso27001backend.auth.dto.AuthUserResponse;
-import se.iso27001platform.iso27001backend.user.repository.AppUserRepository;
+import se.iso27001platform.iso27001backend.membership.repository.OrganizationMembershipRepository;
+import se.iso27001platform.iso27001backend.user.dto.UserProfileResponse;
+import se.iso27001platform.iso27001backend.user.repository.UserProfileRepository;
 
 import java.util.UUID;
 
 @Service
 public class AuthCurrentUserService {
 
-	private final AppUserRepository appUserRepository;
+	private final UserProfileRepository userProfileRepository;
+	private final OrganizationMembershipRepository membershipRepository;
 
-	public AuthCurrentUserService(AppUserRepository appUserRepository) {
-		this.appUserRepository = appUserRepository;
+	public AuthCurrentUserService(
+			UserProfileRepository userProfileRepository,
+			OrganizationMembershipRepository membershipRepository
+	) {
+		this.userProfileRepository = userProfileRepository;
+		this.membershipRepository = membershipRepository;
 	}
 
 	@Transactional(readOnly = true)
@@ -28,7 +35,10 @@ public class AuthCurrentUserService {
 				sessionId(jwt),
 				jwt.getId(),
 				jwt.getExpiresAt(),
-				appUserRepository.findBySupabaseUserIdOrderByCreatedAtAsc(supabaseUserId).stream()
+				userProfileRepository.findBySupabaseUserId(supabaseUserId)
+						.map(UserProfileResponse::from)
+						.orElse(null),
+				membershipRepository.findByUserProfile_SupabaseUserIdOrderByCreatedAtAsc(supabaseUserId).stream()
 						.map(AuthMembershipResponse::from)
 						.toList()
 		);
