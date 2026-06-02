@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.test.web.servlet.MockMvc;
@@ -26,6 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -69,6 +71,86 @@ class Iso27001backendApplicationTests {
 	}
 
 	@Test
+	void createsPublicDemoRequestFromFrontendForm() throws Exception {
+		mockMvc.perform(post("/demo-requests")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "company":"  ACME AB  ",
+								  "name":"  Jane Doe  ",
+								  "email":"  SECURITY@ACME.COM  ",
+								  "country":"Sweden (+46)",
+								  "phone":"  555 123 4567  ",
+								  "size":"11-50",
+								  "message":"  We need help defining scope.  ",
+								  "materials":["standard-forms","gap-analysis"]
+								}
+								"""))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.id").isNotEmpty())
+				.andExpect(jsonPath("$.company").value("ACME AB"))
+				.andExpect(jsonPath("$.name").value("Jane Doe"))
+				.andExpect(jsonPath("$.email").value("security@acme.com"))
+				.andExpect(jsonPath("$.country").value("Sweden (+46)"))
+				.andExpect(jsonPath("$.phone").value("555 123 4567"))
+				.andExpect(jsonPath("$.size").value("11-50"))
+				.andExpect(jsonPath("$.message").value("We need help defining scope."))
+				.andExpect(jsonPath("$.materials[0]").value("gap-analysis"))
+				.andExpect(jsonPath("$.materials[1]").value("standard-forms"))
+				.andExpect(jsonPath("$.status").value("NEW"))
+				.andExpect(jsonPath("$.createdAt").isNotEmpty());
+	}
+
+	@Test
+	void rejectsInvalidPublicDemoRequestOptions() throws Exception {
+		mockMvc.perform(post("/demo-requests")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "company":"ACME AB",
+								  "name":"Jane Doe",
+								  "email":"security@acme.com",
+								  "country":"Sweden (+46)",
+								  "phone":"",
+								  "size":"unknown",
+								  "message":"",
+								  "materials":[]
+								}
+								"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Unsupported company size: unknown"));
+
+		mockMvc.perform(post("/demo-requests")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{
+								  "company":"ACME AB",
+								  "name":"Jane Doe",
+								  "email":"security@acme.com",
+								  "country":"Sweden (+46)",
+								  "phone":"",
+								  "size":"1-10",
+								  "message":"",
+								  "materials":["unknown-material"]
+								}
+								"""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Unsupported demo request material: unknown-material"));
+	}
+
+	@Test
+	void allowsCorsPreflightForPublicDemoRequest() throws Exception {
+		mockMvc.perform(options("/demo-requests")
+						.header(HttpHeaders.ORIGIN, "https://frontend.example.com")
+						.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"))
+				.andExpect(status().isOk())
+				.andExpect(result -> assertTrue(
+						"https://frontend.example.com".equals(result.getResponse().getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN)),
+						"Expected CORS response to allow the requesting frontend origin"
+				));
+	}
+
+	@Test
 	void businessEndpointsRequireJwtAcrossModules() throws Exception {
 		mockMvc.perform(get("/auth/me"))
 				.andExpect(status().isUnauthorized());
@@ -85,6 +167,9 @@ class Iso27001backendApplicationTests {
 						.content("""
 								{"token":"missing-token"}
 								"""))
+				.andExpect(status().isUnauthorized());
+
+		mockMvc.perform(get("/demo-requests"))
 				.andExpect(status().isUnauthorized());
 	}
 

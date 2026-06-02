@@ -3,6 +3,7 @@ package se.iso27001platform.iso27001backend.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.core.GrantedAuthority;
@@ -18,6 +19,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Locale;
 
+import static org.springframework.security.config.Customizer.withDefaults;
+
 @Configuration
 public class SecurityConfig {
 
@@ -25,8 +28,10 @@ public class SecurityConfig {
 	public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtRevocationFilter jwtRevocationFilter) throws Exception {
 		return http
 				.csrf(AbstractHttpConfigurer::disable)
+				.cors(withDefaults())
 				.authorizeHttpRequests(authorize -> authorize
 						.requestMatchers("/health", "/actuator/health").permitAll()
+						.requestMatchers(HttpMethod.POST, "/demo-requests").permitAll()
 						.anyRequest().authenticated()
 				)
 				.oauth2ResourceServer(oauth2 -> oauth2

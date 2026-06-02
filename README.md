@@ -8,6 +8,7 @@ The current MVP covers a vertical slice:
 - Bootstrap the organization creator as `OWNER`
 - Create organization memberships
 - Invite users to an organization
+- Receive public demo and readiness requests
 - Create assessments
 - List ISO 27001-style control questions
 - Submit assessment answers
@@ -62,6 +63,11 @@ The initial migration creates:
 - `organization_invitations`
 - `flyway_schema_history`
 
+Later migrations add:
+
+- `demo_requests`
+- `demo_request_materials`
+
 ## Authentication
 
 All business endpoints require a Supabase Auth access token:
@@ -75,7 +81,10 @@ Only these endpoints are public:
 ```text
 GET /health
 GET /actuator/health
+POST /demo-requests
 ```
+
+`POST /demo-requests` receives public lead and readiness requests from the marketing site. It does not create an organization or assessment automatically.
 
 Recommended Supabase setup:
 
@@ -156,6 +165,15 @@ Health check:
 
 ```powershell
 Invoke-RestMethod http://localhost:8080/health
+```
+
+Submit a public demo request:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8080/demo-requests" `
+  -ContentType "application/json" `
+  -Body '{"company":"Demo AB","name":"Jane Doe","email":"jane@example.com","country":"Sweden (+46)","phone":"555 123 4567","size":"11-50","message":"We need help defining scope.","materials":["standard-forms","gap-analysis"]}'
 ```
 
 For the remaining requests, include a Supabase access token:
@@ -291,6 +309,13 @@ se.iso27001platform.iso27001backend
     dto
     enums
     model
+    service
+  demorequest
+    controller
+    dto
+    enums
+    model
+    repository
     service
   invitation
     controller
