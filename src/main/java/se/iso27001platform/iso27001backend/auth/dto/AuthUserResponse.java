@@ -13,6 +13,7 @@ public record AuthUserResponse(
 		UUID sessionId,
 		String jwtId,
 		Instant expiresAt,
+		boolean platformAdmin,
 		UserProfileResponse profile,
 		List<AuthMembershipResponse> memberships
 ) {

@@ -9,4 +9,6 @@ import java.util.UUID;
 public interface UserProfileRepository extends JpaRepository<UserProfile, UUID> {
 
 	Optional<UserProfile> findBySupabaseUserId(UUID supabaseUserId);
+
+	Optional<UserProfile> findFirstByEmailOrderByCreatedAtAsc(String email);
 }

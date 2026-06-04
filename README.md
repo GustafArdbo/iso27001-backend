@@ -8,7 +8,9 @@ The current MVP covers a vertical slice:
 - Bootstrap the organization creator as `OWNER`
 - Create organization memberships
 - Invite users to an organization
-- Receive public demo and readiness requests
+- Receive public organization applications
+- Manually approve or reject applications
+- Create the approved organization and invite its owner through Supabase Auth
 - Create assessments
 - List ISO 27001-style control questions
 - Submit assessment answers
@@ -38,7 +40,14 @@ $env:DB_USERNAME="postgres.<project-ref>"
 $env:DB_PASSWORD="<database-password>"
 $env:SUPABASE_JWT_ISSUER="https://<project-ref>.supabase.co/auth/v1"
 $env:SUPABASE_JWT_JWK_SET_URI="https://<project-ref>.supabase.co/auth/v1/.well-known/jwks.json"
+$env:SUPABASE_URL="https://<project-ref>.supabase.co"
+$env:SUPABASE_SECRET_KEY="<supabase-secret-or-service-role-key>"
+$env:FRONTEND_INVITE_REDIRECT_URL="http://localhost:3000/auth/callback"
+$env:PLATFORM_ADMIN_USER_IDS="<supabase-auth-user-uuid>"
+$env:CORS_ALLOWED_ORIGIN_PATTERNS="http://localhost:3000,https://complypilot.se,https://www.complypilot.se"
 ```
+
+Find the platform administrator UUID in Supabase under **Authentication > Users**. Multiple UUIDs can be configured as a comma-separated list.
 
 Then start the backend:
 
@@ -52,7 +61,9 @@ When the app starts, Flyway applies migrations from:
 src/main/resources/db/migration
 ```
 
-The initial migration creates:
+`SUPABASE_SECRET_KEY` is a server-only credential. Never expose it to the frontend or commit it to Git.
+
+The migrations create:
 
 - `organizations`
 - `user_profiles`
@@ -61,12 +72,19 @@ The initial migration creates:
 - `assessment_answers`
 - `auth_revocations`
 - `organization_invitations`
+- `organization_applications`
+- `organization_application_materials`
 - `flyway_schema_history`
 
-Later migrations add:
+`V3__organization_application_onboarding.sql` replaces the old demo-request tables. It intentionally deletes rows from those legacy tables because the project currently only contains test data.
 
-- `demo_requests`
-- `demo_request_materials`
+For Railway, configure the same environment variables and use the production callback URL:
+
+```text
+FRONTEND_INVITE_REDIRECT_URL=https://complypilot.se/auth/callback
+```
+
+Add that exact callback URL to the allowed redirect URLs in Supabase Auth as well.
 
 ## Authentication
 
@@ -81,16 +99,17 @@ Only these endpoints are public:
 ```text
 GET /health
 GET /actuator/health
-POST /demo-requests
+POST /organization-applications
 ```
 
-`POST /demo-requests` receives public lead and readiness requests from the marketing site. It does not create an organization or assessment automatically.
+`POST /organization-applications` stores the public form submission. It never creates an organization automatically.
 
 Recommended Supabase setup:
 
 - Use asymmetric JWT signing keys.
 - Verify tokens through the Supabase JWKS endpoint.
 - Keep access tokens short-lived.
+- Disable open public sign-up if all customer access should start from an approved application or organization invitation.
 - Use Supabase sign-out/session controls for refresh-token/session termination.
 - Use this backend's revocation table to block already-issued access tokens or sessions from this API.
 
@@ -102,11 +121,49 @@ POST /auth/revocations/current-token
 POST /auth/revocations/current-session
 ```
 
-`/auth/me` returns the Supabase JWT identity, its global `user_profiles` record when one exists, and organization memberships.
+`/auth/me` creates or links the global `user_profiles` record, completes an approved owner invitation, and returns the JWT identity, `platformAdmin` flag, profile, and organization memberships.
 
 `/auth/revocations/current-token` revokes only the presented access token until its `exp`.
 
 `/auth/revocations/current-session` revokes the presented token's `session_id` for this backend. Pair this with Supabase sign-out so refresh tokens are also terminated.
+
+## Organization Onboarding
+
+The onboarding flow is:
+
+1. A visitor submits `POST /organization-applications`.
+2. A platform administrator lists and reviews submitted applications.
+3. The administrator approves or rejects the application.
+4. Approval creates the organization, owner profile, and `OWNER` membership exactly once.
+5. The backend asks Supabase Auth to invite the owner or send an existing user a magic link.
+6. The frontend handles `/auth/callback`, establishes the Supabase session, and calls `GET /auth/me`.
+7. `/auth/me` links the Supabase user to the prepared owner profile and returns the organization membership used for dashboard routing.
+
+Application statuses:
+
+```text
+SUBMITTED -> APPROVED
+SUBMITTED -> REJECTED
+```
+
+Owner invitation statuses:
+
+```text
+NOT_SENT -> SENT -> ACCEPTED
+NOT_SENT -> FAILED -> SENT
+```
+
+Platform administrator endpoints require a verified Supabase JWT whose immutable subject UUID is listed in `PLATFORM_ADMIN_USER_IDS`:
+
+```text
+GET  /admin/organization-applications
+GET  /admin/organization-applications/{id}
+POST /admin/organization-applications/{id}/approve
+POST /admin/organization-applications/{id}/reject
+POST /admin/organization-applications/{id}/resend-owner-invitation
+```
+
+Approval is idempotent. Repeating it does not create another organization or membership. If Supabase delivery fails, the application remains approved with invitation status `FAILED`, and an administrator can resend it.
 
 ## Authorization
 
@@ -131,7 +188,7 @@ Role rules:
 
 Current endpoint rules:
 
-- `POST /organizations` creates the organization and bootstraps the authenticated Supabase user as `OWNER`.
+- `POST /organizations` is a platform-admin-only operational endpoint that creates the organization and bootstraps the administrator as `OWNER`. Normal customer organizations are created by approving an application.
 - `GET /organizations/{id}` requires membership in that organization.
 - `POST /organizations/{id}/memberships` requires `OWNER` or `ADMIN`.
 - `GET /organizations/{id}/memberships` requires `OWNER` or `ADMIN`.
@@ -141,6 +198,7 @@ Current endpoint rules:
 - `DELETE /organizations/{id}/invitations/{invitationId}` requires `OWNER` or `ADMIN`.
 - `POST /invitations/accept` requires a JWT whose email matches the invitation email.
 - `POST /assessments` requires `OWNER`, `ADMIN`, or `AUDITOR` in the target organization.
+- `GET /organizations/{id}/assessments` requires membership in that organization.
 - `GET /assessments/{id}`, `/questions`, and `/summary` require membership in the assessment organization.
 - `POST /assessments/{id}/answers` requires `OWNER`, `ADMIN`, `AUDITOR`, or `MEMBER`.
 - `VIEWER` can read but cannot create assessments or submit answers.
@@ -167,11 +225,11 @@ Health check:
 Invoke-RestMethod http://localhost:8080/health
 ```
 
-Submit a public demo request:
+Submit a public organization application:
 
 ```powershell
 Invoke-RestMethod -Method Post `
-  -Uri "http://localhost:8080/demo-requests" `
+  -Uri "http://localhost:8080/organization-applications" `
   -ContentType "application/json" `
   -Body '{"company":"Demo AB","name":"Jane Doe","email":"jane@example.com","country":"Sweden (+46)","phone":"555 123 4567","size":"11-50","message":"We need help defining scope.","materials":["standard-forms","gap-analysis"]}'
 ```
@@ -192,7 +250,7 @@ $org = Invoke-RestMethod -Method Post `
   -Body '{"name":"Demo AB"}'
 ```
 
-The authenticated Supabase user is automatically created as an `OWNER` membership for this organization.
+The authenticated platform administrator is automatically created as an `OWNER` membership for this operationally created organization.
 
 Create assessment:
 
@@ -202,6 +260,12 @@ $assessment = Invoke-RestMethod -Method Post `
   -Headers $headers `
   -ContentType "application/json" `
   -Body (@{ organizationId = $org.id; name = "Initial ISO 27001 readiness assessment" } | ConvertTo-Json)
+```
+
+List organization assessments:
+
+```powershell
+Invoke-RestMethod "http://localhost:8080/organizations/$($org.id)/assessments" -Headers $headers
 ```
 
 Create organization membership:
@@ -310,7 +374,8 @@ se.iso27001platform.iso27001backend
     enums
     model
     service
-  demorequest
+  onboarding
+    client
     controller
     dto
     enums

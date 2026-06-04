@@ -34,8 +34,12 @@ public class CurrentUserService {
 	}
 
 	public UUID currentSupabaseUserId() {
+		String subject = currentJwt().getSubject();
+		if (subject == null || subject.isBlank()) {
+			throw new AccessDeniedException("JWT subject must be a Supabase user UUID");
+		}
 		try {
-			return UUID.fromString(currentJwt().getSubject());
+			return UUID.fromString(subject);
 		}
 		catch (IllegalArgumentException exception) {
 			throw new AccessDeniedException("JWT subject must be a Supabase user UUID");

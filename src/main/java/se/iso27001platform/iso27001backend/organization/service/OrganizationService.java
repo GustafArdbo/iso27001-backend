@@ -3,6 +3,7 @@ package se.iso27001platform.iso27001backend.organization.service;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import se.iso27001platform.iso27001backend.auth.service.CurrentUserService;
+import se.iso27001platform.iso27001backend.auth.service.PlatformAdminAccessService;
 import se.iso27001platform.iso27001backend.common.exception.ResourceNotFoundException;
 import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
 import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
@@ -25,22 +26,26 @@ public class OrganizationService {
 	private final CurrentUserService currentUserService;
 	private final UserProfileService userProfileService;
 	private final OrganizationMembershipRepository membershipRepository;
+	private final PlatformAdminAccessService platformAdminAccessService;
 
 	public OrganizationService(
 			OrganizationRepository organizationRepository,
 			OrganizationAccessService organizationAccessService,
 			CurrentUserService currentUserService,
 			UserProfileService userProfileService,
-			OrganizationMembershipRepository membershipRepository
+			OrganizationMembershipRepository membershipRepository,
+			PlatformAdminAccessService platformAdminAccessService
 	) {
 		this.organizationRepository = organizationRepository;
 		this.organizationAccessService = organizationAccessService;
 		this.currentUserService = currentUserService;
 		this.userProfileService = userProfileService;
 		this.membershipRepository = membershipRepository;
+		this.platformAdminAccessService = platformAdminAccessService;
 	}
 
 	public OrganizationResponse create(CreateOrganizationRequest request) {
+		platformAdminAccessService.requirePlatformAdmin();
 		Organization organization = organizationRepository.save(new Organization(request.name()));
 		UserProfile userProfile = userProfileService.getOrCreate(
 				currentUserService.currentSupabaseUserId(),

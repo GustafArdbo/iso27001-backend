@@ -31,7 +31,7 @@ public class SecurityConfig {
 				.cors(withDefaults())
 				.authorizeHttpRequests(authorize -> authorize
 						.requestMatchers("/health", "/actuator/health").permitAll()
-						.requestMatchers(HttpMethod.POST, "/demo-requests").permitAll()
+						.requestMatchers(HttpMethod.POST, "/organization-applications").permitAll()
 						.anyRequest().authenticated()
 				)
 				.oauth2ResourceServer(oauth2 -> oauth2

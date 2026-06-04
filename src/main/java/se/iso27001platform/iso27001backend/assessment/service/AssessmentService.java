@@ -64,6 +64,15 @@ public class AssessmentService {
 	}
 
 	@Transactional(readOnly = true)
+	public List<AssessmentResponse> findByOrganization(UUID organizationId) {
+		organizationService.getRequired(organizationId);
+		organizationAccessService.requireMember(organizationId);
+		return assessmentRepository.findByOrganization_IdOrderByCreatedAtDesc(organizationId).stream()
+				.map(AssessmentResponse::from)
+				.toList();
+	}
+
+	@Transactional(readOnly = true)
 	public List<AssessmentQuestionResponse> findQuestions(UUID id) {
 		Assessment assessment = getRequired(id);
 		organizationAccessService.requireMember(assessment.getOrganization().getId());

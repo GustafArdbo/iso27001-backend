@@ -9,11 +9,15 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import se.iso27001platform.iso27001backend.membership.enums.MembershipRole;
 import se.iso27001platform.iso27001backend.membership.model.OrganizationMembership;
 import se.iso27001platform.iso27001backend.membership.repository.OrganizationMembershipRepository;
+import se.iso27001platform.iso27001backend.onboarding.client.OwnerInvitationDeliveryException;
+import se.iso27001platform.iso27001backend.onboarding.client.OwnerInvitationResult;
+import se.iso27001platform.iso27001backend.onboarding.client.OwnerInvitationSender;
 import se.iso27001platform.iso27001backend.organization.model.Organization;
 import se.iso27001platform.iso27001backend.organization.service.OrganizationService;
 import se.iso27001platform.iso27001backend.user.model.UserProfile;
@@ -24,6 +28,12 @@ import java.util.Locale;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -40,6 +50,8 @@ class Iso27001backendApplicationTests {
 	private static final UUID AUDITOR_SUPABASE_USER_ID = UUID.fromString("22222222-2222-4222-8222-222222222222");
 	private static final UUID VIEWER_SUPABASE_USER_ID = UUID.fromString("33333333-3333-4333-8333-333333333333");
 	private static final UUID OUTSIDER_SUPABASE_USER_ID = UUID.fromString("44444444-4444-4444-8444-444444444444");
+	private static final UUID APPLICATION_OWNER_SUPABASE_USER_ID = UUID.fromString("55555555-5555-4555-8555-555555555555");
+	private static final UUID RESEND_OWNER_SUPABASE_USER_ID = UUID.fromString("66666666-6666-4666-8666-666666666666");
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -52,6 +64,9 @@ class Iso27001backendApplicationTests {
 
 	@Autowired
 	private UserProfileService userProfileService;
+
+	@MockitoBean
+	private OwnerInvitationSender ownerInvitationSender;
 
 	private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -71,14 +86,14 @@ class Iso27001backendApplicationTests {
 	}
 
 	@Test
-	void createsPublicDemoRequestFromFrontendForm() throws Exception {
-		mockMvc.perform(post("/demo-requests")
+	void submitsPublicOrganizationApplicationFromFrontendForm() throws Exception {
+		String response = mockMvc.perform(post("/organization-applications")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
 								{
 								  "company":"  ACME AB  ",
 								  "name":"  Jane Doe  ",
-								  "email":"  SECURITY@ACME.COM  ",
+								  "email":"  PUBLIC-APPLICATION@EXAMPLE.COM  ",
 								  "country":"Sweden (+46)",
 								  "phone":"  555 123 4567  ",
 								  "size":"11-50",
@@ -88,28 +103,38 @@ class Iso27001backendApplicationTests {
 								"""))
 				.andExpect(status().isCreated())
 				.andExpect(jsonPath("$.id").isNotEmpty())
+				.andExpect(jsonPath("$.status").value("SUBMITTED"))
+				.andExpect(jsonPath("$.createdAt").isNotEmpty())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		UUID applicationId = readId(response);
+		mockMvc.perform(get("/admin/organization-applications/{id}", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.company").value("ACME AB"))
-				.andExpect(jsonPath("$.name").value("Jane Doe"))
-				.andExpect(jsonPath("$.email").value("security@acme.com"))
+				.andExpect(jsonPath("$.ownerName").value("Jane Doe"))
+				.andExpect(jsonPath("$.ownerEmail").value("public-application@example.com"))
 				.andExpect(jsonPath("$.country").value("Sweden (+46)"))
 				.andExpect(jsonPath("$.phone").value("555 123 4567"))
 				.andExpect(jsonPath("$.size").value("11-50"))
 				.andExpect(jsonPath("$.message").value("We need help defining scope."))
 				.andExpect(jsonPath("$.materials[0]").value("gap-analysis"))
 				.andExpect(jsonPath("$.materials[1]").value("standard-forms"))
-				.andExpect(jsonPath("$.status").value("NEW"))
-				.andExpect(jsonPath("$.createdAt").isNotEmpty());
+				.andExpect(jsonPath("$.applicationStatus").value("SUBMITTED"))
+				.andExpect(jsonPath("$.invitationStatus").value("NOT_SENT"));
 	}
 
 	@Test
-	void rejectsInvalidPublicDemoRequestOptions() throws Exception {
-		mockMvc.perform(post("/demo-requests")
+	void rejectsInvalidPublicOrganizationApplicationOptions() throws Exception {
+		mockMvc.perform(post("/organization-applications")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
 								{
 								  "company":"ACME AB",
 								  "name":"Jane Doe",
-								  "email":"security@acme.com",
+								  "email":"invalid-size@example.com",
 								  "country":"Sweden (+46)",
 								  "phone":"",
 								  "size":"unknown",
@@ -120,13 +145,13 @@ class Iso27001backendApplicationTests {
 				.andExpect(status().isBadRequest())
 				.andExpect(jsonPath("$.message").value("Unsupported company size: unknown"));
 
-		mockMvc.perform(post("/demo-requests")
+		mockMvc.perform(post("/organization-applications")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
 								{
 								  "company":"ACME AB",
 								  "name":"Jane Doe",
-								  "email":"security@acme.com",
+								  "email":"invalid-material@example.com",
 								  "country":"Sweden (+46)",
 								  "phone":"",
 								  "size":"1-10",
@@ -135,18 +160,164 @@ class Iso27001backendApplicationTests {
 								}
 								"""))
 				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.message").value("Unsupported demo request material: unknown-material"));
+				.andExpect(jsonPath("$.message").value("Unsupported requested material: unknown-material"));
 	}
 
 	@Test
-	void allowsCorsPreflightForPublicDemoRequest() throws Exception {
-		mockMvc.perform(options("/demo-requests")
+	void allowsCorsPreflightForPublicOrganizationApplication() throws Exception {
+		mockMvc.perform(options("/organization-applications")
 						.header(HttpHeaders.ORIGIN, "https://frontend.example.com")
 						.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"))
 				.andExpect(status().isOk())
 				.andExpect(result -> assertTrue(
 						"https://frontend.example.com".equals(result.getResponse().getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN)),
 						"Expected CORS response to allow the requesting frontend origin"
+				));
+	}
+
+	@Test
+	void rejectsCorsPreflightFromUnconfiguredOrigin() throws Exception {
+		mockMvc.perform(options("/organization-applications")
+						.header(HttpHeaders.ORIGIN, "https://untrusted.example.com")
+						.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"))
+				.andExpect(status().isForbidden())
+				.andExpect(result -> assertTrue(
+						result.getResponse().getHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN) == null,
+						"Expected CORS response not to allow an unconfigured origin"
+				));
+	}
+
+	@Test
+	void approvesApplicationIdempotentlyAndLinksOwnerOnFirstLogin() throws Exception {
+		UUID applicationId = submitOrganizationApplication("Owner Onboarding AB", "application-owner@example.com");
+		when(ownerInvitationSender.send(
+				eq("application-owner@example.com"),
+				eq("Jane Doe"),
+				any(UUID.class)
+		)).thenReturn(new OwnerInvitationResult(null));
+
+		String approvalResponse = mockMvc.perform(post("/admin/organization-applications/{id}/approve", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.applicationStatus").value("APPROVED"))
+				.andExpect(jsonPath("$.invitationStatus").value("SENT"))
+				.andExpect(jsonPath("$.organizationId").isNotEmpty())
+				.andExpect(jsonPath("$.ownerProfileId").isNotEmpty())
+				.andExpect(jsonPath("$.approvedBySupabaseUserId").value(OWNER_SUPABASE_USER_ID.toString()))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+
+		JsonNode approved = readJson(approvalResponse);
+		String organizationId = approved.get("organizationId").asText();
+		String ownerProfileId = approved.get("ownerProfileId").asText();
+
+		mockMvc.perform(post("/admin/organization-applications/{id}/approve", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.organizationId").value(organizationId))
+				.andExpect(jsonPath("$.ownerProfileId").value(ownerProfileId));
+		verify(ownerInvitationSender, times(1)).send(
+				"application-owner@example.com",
+				"Jane Doe",
+				UUID.fromString(organizationId)
+		);
+
+		mockMvc.perform(get("/auth/me")
+						.with(authenticatedJwt(APPLICATION_OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.platformAdmin").value(false))
+				.andExpect(jsonPath("$.profile.id").value(ownerProfileId))
+				.andExpect(jsonPath("$.profile.supabaseUserId").value(APPLICATION_OWNER_SUPABASE_USER_ID.toString()))
+				.andExpect(jsonPath("$.memberships.length()").value(1))
+				.andExpect(jsonPath("$.memberships[0].organizationId").value(organizationId))
+				.andExpect(jsonPath("$.memberships[0].role").value("OWNER"));
+
+		mockMvc.perform(get("/admin/organization-applications/{id}", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.invitationStatus").value("ACCEPTED"))
+				.andExpect(jsonPath("$.invitationAcceptedAt").isNotEmpty());
+	}
+
+	@Test
+	void recordsFailedOwnerInvitationAndResendsWithoutCreatingAnotherOrganization() throws Exception {
+		UUID applicationId = submitOrganizationApplication("Resend Onboarding AB", "resend-owner@example.com");
+		when(ownerInvitationSender.send(
+				eq("resend-owner@example.com"),
+				eq("Jane Doe"),
+				any(UUID.class)
+		))
+				.thenThrow(new OwnerInvitationDeliveryException("Mail provider unavailable"))
+				.thenReturn(new OwnerInvitationResult(RESEND_OWNER_SUPABASE_USER_ID));
+
+		String failedResponse = mockMvc.perform(post("/admin/organization-applications/{id}/approve", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.applicationStatus").value("APPROVED"))
+				.andExpect(jsonPath("$.invitationStatus").value("FAILED"))
+				.andExpect(jsonPath("$.invitationFailureReason").value("Mail provider unavailable"))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String organizationId = readJson(failedResponse).get("organizationId").asText();
+
+		mockMvc.perform(post("/admin/organization-applications/{id}/resend-owner-invitation", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.organizationId").value(organizationId))
+				.andExpect(jsonPath("$.invitationStatus").value("SENT"))
+				.andExpect(jsonPath("$.invitationFailureReason").doesNotExist());
+		verify(ownerInvitationSender, times(2)).send("resend-owner@example.com", "Jane Doe", UUID.fromString(organizationId));
+	}
+
+	@Test
+	void rejectsApplicationAndProtectsAdminEndpoints() throws Exception {
+		UUID applicationId = submitOrganizationApplication("Rejected Onboarding AB", "rejected-owner@example.com");
+
+		mockMvc.perform(get("/admin/organization-applications")
+						.with(authenticatedJwt(OUTSIDER_SUPABASE_USER_ID)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.message").value("Platform administrator access is required"));
+
+		mockMvc.perform(post("/organizations")
+						.with(authenticatedJwt(OUTSIDER_SUPABASE_USER_ID))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"name":"Bypass Attempt AB"}
+								"""))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.message").value("Platform administrator access is required"));
+
+		mockMvc.perform(post("/admin/organization-applications/{id}/reject", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"reason":"Outside our current target market"}
+								"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.applicationStatus").value("REJECTED"))
+				.andExpect(jsonPath("$.invitationStatus").value("NOT_SENT"))
+				.andExpect(jsonPath("$.rejectionReason").value("Outside our current target market"))
+				.andExpect(jsonPath("$.rejectedBySupabaseUserId").value(OWNER_SUPABASE_USER_ID.toString()));
+
+		mockMvc.perform(post("/admin/organization-applications/{id}/approve", applicationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Rejected organization application cannot be approved"));
+		verify(ownerInvitationSender, never()).send(any(), any(), any(UUID.class));
+	}
+
+	@Test
+	void rejectsDuplicateActiveOrganizationApplication() throws Exception {
+		submitOrganizationApplication("First Application AB", "duplicate-application@example.com");
+
+		mockMvc.perform(post("/organization-applications")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(organizationApplicationJson("Second Application AB", "duplicate-application@example.com")))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.message").value(
+						"An active organization application already exists for email: duplicate-application@example.com"
 				));
 	}
 
@@ -169,12 +340,33 @@ class Iso27001backendApplicationTests {
 								"""))
 				.andExpect(status().isUnauthorized());
 
-		mockMvc.perform(get("/demo-requests"))
+		mockMvc.perform(get("/organizations/{organizationId}/assessments", UUID.randomUUID()))
+				.andExpect(status().isUnauthorized());
+
+		mockMvc.perform(get("/admin/organization-applications"))
 				.andExpect(status().isUnauthorized());
 	}
 
 	@Test
+	void exposesPlatformAdministratorFlagForConfiguredSupabaseUser() throws Exception {
+		mockMvc.perform(get("/auth/me")
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.platformAdmin").value(true));
+	}
+
+	@Test
 	void rejectsOrganizationBootstrapWithoutUsableJwtIdentity() throws Exception {
+		mockMvc.perform(get("/auth/me")
+						.with(authenticatedJwtWithoutEmail(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.message").value("JWT email claim is required"));
+
+		mockMvc.perform(get("/auth/me")
+						.with(authenticatedJwtWithSubject("not-a-uuid", "owner@example.com")))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.message").value("JWT subject must be a Supabase user UUID"));
+
 		mockMvc.perform(post("/organizations")
 						.with(authenticatedJwtWithoutEmail(OWNER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
@@ -262,6 +454,54 @@ class Iso27001backendApplicationTests {
 				.andExpect(jsonPath("$.answerCounts.YES").value(1))
 				.andExpect(jsonPath("$.answerCounts.PARTIAL").value(1))
 				.andExpect(jsonPath("$.answerCounts.NOT_APPLICABLE").value(1));
+	}
+
+	@Test
+	void listsOrganizationAssessmentsMostRecentFirst() throws Exception {
+		UUID organizationId = createOrganization("Assessment Listing AB");
+		UUID firstAssessmentId = createAssessment(organizationId, "First assessment", OWNER_SUPABASE_USER_ID);
+		UUID secondAssessmentId = createAssessment(organizationId, "Second assessment", OWNER_SUPABASE_USER_ID);
+
+		mockMvc.perform(get("/organizations/{organizationId}/assessments", organizationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(2))
+				.andExpect(jsonPath("$[0].id").value(secondAssessmentId.toString()))
+				.andExpect(jsonPath("$[0].organizationId").value(organizationId.toString()))
+				.andExpect(jsonPath("$[0].name").value("Second assessment"))
+				.andExpect(jsonPath("$[0].status").value("DRAFT"))
+				.andExpect(jsonPath("$[1].id").value(firstAssessmentId.toString()))
+				.andExpect(jsonPath("$[1].name").value("First assessment"));
+	}
+
+	@Test
+	void listsEmptyOrganizationAssessmentCollection() throws Exception {
+		UUID organizationId = createOrganization("Empty Assessment Listing AB");
+
+		mockMvc.perform(get("/organizations/{organizationId}/assessments", organizationId)
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(0));
+	}
+
+	@Test
+	void protectsOrganizationAssessmentListingByMembership() throws Exception {
+		UUID organizationId = createOrganizationWithMembership(
+				"Protected Assessment Listing AB",
+				VIEWER_SUPABASE_USER_ID,
+				MembershipRole.MEMBER
+		);
+		createAssessment(organizationId, "Visible to organization member", OWNER_SUPABASE_USER_ID);
+
+		mockMvc.perform(get("/organizations/{organizationId}/assessments", organizationId)
+						.with(authenticatedJwt(VIEWER_SUPABASE_USER_ID)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(1))
+				.andExpect(jsonPath("$[0].name").value("Visible to organization member"));
+
+		mockMvc.perform(get("/organizations/{organizationId}/assessments", organizationId)
+						.with(authenticatedJwt(OUTSIDER_SUPABASE_USER_ID)))
+				.andExpect(status().isForbidden());
 	}
 
 	@Test
@@ -821,7 +1061,12 @@ class Iso27001backendApplicationTests {
 	@Test
 	void rejectsCrossOrganizationAccess() throws Exception {
 		UUID organizationAId = createOrganizationWithMembership("Organization A", OWNER_SUPABASE_USER_ID, MembershipRole.OWNER);
-		UUID organizationBId = createOrganization("Organization B", AUDITOR_SUPABASE_USER_ID);
+		UUID organizationBId = createOrganization("Organization B");
+		membershipRepository.findByOrganization_IdAndUserProfile_SupabaseUserId(
+				organizationBId,
+				OWNER_SUPABASE_USER_ID
+		).ifPresent(membershipRepository::delete);
+		addMembership(organizationBId, AUDITOR_SUPABASE_USER_ID, MembershipRole.OWNER);
 
 		mockMvc.perform(get("/organizations/{id}", organizationAId)
 						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID)))
@@ -864,12 +1109,8 @@ class Iso27001backendApplicationTests {
 	}
 
 	private UUID createOrganization(String name) throws Exception {
-		return createOrganization(name, OWNER_SUPABASE_USER_ID);
-	}
-
-	private UUID createOrganization(String name, UUID supabaseUserId) throws Exception {
 		String organizationResponse = mockMvc.perform(post("/organizations")
-						.with(authenticatedJwt(supabaseUserId))
+						.with(authenticatedJwt(OWNER_SUPABASE_USER_ID))
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("""
 								{"name":"%s"}
@@ -880,6 +1121,33 @@ class Iso27001backendApplicationTests {
 				.getContentAsString();
 
 		return readId(organizationResponse);
+	}
+
+	private UUID submitOrganizationApplication(String company, String email) throws Exception {
+		String response = mockMvc.perform(post("/organization-applications")
+						.contentType(MediaType.APPLICATION_JSON)
+						.content(organizationApplicationJson(company, email)))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.status").value("SUBMITTED"))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		return readId(response);
+	}
+
+	private String organizationApplicationJson(String company, String email) {
+		return """
+				{
+				  "company":"%s",
+				  "name":"Jane Doe",
+				  "email":"%s",
+				  "country":"Sweden (+46)",
+				  "phone":"555 123 4567",
+				  "size":"11-50",
+				  "message":"We need help defining scope.",
+				  "materials":["standard-forms","gap-analysis"]
+				}
+				""".formatted(company, email);
 	}
 
 	private UUID createOrganizationWithMembership(String name, UUID supabaseUserId, MembershipRole role) throws Exception {
@@ -1067,6 +1335,12 @@ class Iso27001backendApplicationTests {
 		}
 		if (VIEWER_SUPABASE_USER_ID.equals(subject)) {
 			return "viewer@example.com";
+		}
+		if (APPLICATION_OWNER_SUPABASE_USER_ID.equals(subject)) {
+			return "application-owner@example.com";
+		}
+		if (RESEND_OWNER_SUPABASE_USER_ID.equals(subject)) {
+			return "resend-owner@example.com";
 		}
 		return "outsider@example.com";
 	}
